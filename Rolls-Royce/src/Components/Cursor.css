@@ -1,0 +1,11 @@
+.cursor{
+    height: 11px;
+    width: 11px;
+    position: fixed;
+    border-radius: 50%;
+    border: 2px solid grey;
+    /* background-color: brown; */
+    transition: opacity 0.3s linear, left 0s linear, top 0s linear, scale 0.3s linear, border 0.3s linear;
+    z-index: 1000;
+    pointer-events: none;
+}

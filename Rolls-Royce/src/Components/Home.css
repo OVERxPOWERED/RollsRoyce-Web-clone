@@ -1,0 +1,32 @@
+.HomeContainer {
+    height: 100vh;
+    width: 100%;
+    scroll-snap-type: y mandatory;
+    overflow-y: auto;
+
+    &>div {
+        height: 100vh;
+        width: 100%;
+        background-position: center;
+        background-size: cover;
+        scroll-snap-align: start;
+        scroll-snap-stop: always;
+    }
+
+    &>span {
+        position: fixed;
+        top: var(--Top);
+        left: 20px;
+        height: 5.8px;
+        width: 5.8px;
+        border-radius: 50%;
+        /* background-color: rgba(255, 255, 255, 0.508); */
+
+        & > span{
+            height: 5.8px;
+            width: 5.8px;
+            border-radius: 50%;
+            background-color: rgba(255, 255, 255, 0.508);
+        }
+    }
+}

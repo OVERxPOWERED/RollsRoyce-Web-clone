@@ -1,0 +1,9 @@
+@font-face {
+  font-family: "RRFont";
+  src: url("./assets/RivieraNightsTrial-Regular.otf");
+}
+
+*{
+  font-family: RRFont;
+  cursor: none;
+}
