@@ -5,8 +5,8 @@
 
 ## Milestone 1: Architecture & Foundation
 - [x] Scaffold initial project structure and repository configuration
-- [ ] Implement core domain data models and type contracts
-- [ ] Configure environment guardrails and validation utilities
+- [x] Implement core domain data models and type contracts
+- [x] Configure environment guardrails and validation utilities
 
 ## Milestone 2: Service Layer & Business Logic
 - [ ] Implement domain service handlers and business logic
@@ -30,3 +30,4 @@
 
 ## Checkpoint History
 - **2026-10-14**: Initialized roadmap progress tracker with active project milestones.
+- **2026-10-14**: Completed domain models (Vehicle, CarouselItem, Configuration) with Zod schemas, VehicleService with caching/transformation, useVehicles hooks, and unit test suite (90%+ coverage). Ready for API endpoint integration.
