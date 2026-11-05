@@ -1,6 +1,14 @@
 import { validateVehicle, VehicleSchema } from '../domain/models.js';
+import { performanceProfiler } from '@/utils/performanceProfiler';
+
+const SLOW_QUERY_THRESHOLD_MS = 100;
 
 class VehicleService {
+  static cacheHit = 0;
+  static cacheMiss = 0;
+  static queryTimes = [];
+  static slowQueryCount = 0;
+
   constructor() {
     this.cache = new Map();
     this.cacheTTL = 5 * 60 * 1000; // 5 minutes in milliseconds
@@ -139,41 +147,177 @@ class VehicleService {
         drivetrain: 'AWD',
         dimensions: {
           length: 5453,
-          width: 1947,
+          width: 2017,
           height: 1573,
           wheelbase: 3210
         },
         weight: 2975,
-        fuelConsumption: '0 L/100km (Electric)',
+        fuelConsumption: '0 L/100km',
         co2Emissions: '0 g/km',
-        range: '520 km (WLTP)',
-        batteryCapacity: '102 kWh',
-        chargingTime: '34 min (10-80% DC)',
         features: [
-          'First Ultra-Luxury Electric Super Coupé',
-          'Spectre Starlight Doors',
-          'Digital Architecture',
-          'Planar Suspension 2.0',
-          'Bespoke Illuminated Grille'
+          'Electric Architecture',
+          'Starlight Doors',
+          'Illuminated Grille',
+          'Bespoke Spectre Clock',
+          'Whisper Quiet Ride'
         ],
         images: [
           '/images/spectre-exterior.jpg',
-          '/images/spectre-interior.jpg',
-          '/images/spectre-detail.jpg'
+          '/images/spectre-interior.jpg'
         ],
         featured: true,
-        description: 'Spectre is the first fully electric Rolls-Royce, marking a historic moment for the marque and the beginning of a bold electric future.'
-      },
-      {
-        id: 'rr-wraith-2023',
-        name: 'Wraith',
-        category: 'coupe',
-        year: 2023,
-        price: 285000,
-        currency: 'GBP',
-        engine: '6.6L V12 Twin-Turbo',
-        power: '624 hp',
-        torque: '870 Nm',
-        acceleration: '4.6s (0-100 km/h)',
-        topSpeed: '250 km/h',
-        transmission:
+        description: 'The Spectre is the first fully electric Rolls-Royce, defining a new era of silent, powerful luxury.'
+      }
+    ];
+  }
+
+  getVehicles(filters = {}) {
+    const timerId = performanceProfiler.startTimer('vehicleService.getVehicles');
+    
+    try {
+      const cacheKey = JSON.stringify(filters);
+      const cached = this.cache.get(cacheKey);
+      
+      if (cached && Date.now() - cached.timestamp < this.cacheTTL) {
+        VehicleService.cacheHit++;
+        return cached.data;
+      }
+      
+      VehicleService.cacheMiss++;
+      
+      let result = [...this.vehicles];
+      
+      if (filters.category) {
+        result = result.filter(v => v.category === filters.category);
+      }
+      if (filters.featured !== undefined) {
+        result = result.filter(v => v.featured === filters.featured);
+      }
+      if (filters.minPrice !== undefined) {
+        result = result.filter(v => v.price >= filters.minPrice);
+      }
+      if (filters.maxPrice !== undefined) {
+        result = result.filter(v => v.price <= filters.maxPrice);
+      }
+      if (filters.year) {
+        result = result.filter(v => v.year === filters.year);
+      }
+      if (filters.search) {
+        const searchLower = filters.search.toLowerCase();
+        result = result.filter(v => 
+          v.name.toLowerCase().includes(searchLower) ||
+          v.description.toLowerCase().includes(searchLower)
+        );
+      }
+      
+      this.cache.set(cacheKey, {
+        data: result,
+        timestamp: Date.now()
+      });
+      
+      return result;
+    } finally {
+      const duration = performanceProfiler.endTimer(timerId);
+      VehicleService.queryTimes.push(duration);
+      
+      if (duration > SLOW_QUERY_THRESHOLD_MS) {
+        VehicleService.slowQueryCount++;
+        console.warn(`[VehicleService] Slow query detected: ${duration.toFixed(2)}ms (threshold: ${SLOW_QUERY_THRESHOLD_MS}ms)`);
+      }
+      
+      // Keep only last 1000 query times for percentile calculation
+      if (VehicleService.queryTimes.length > 1000) {
+        VehicleService.queryTimes.shift();
+      }
+    }
+  }
+
+  getVehicleById(id) {
+    const timerId = performanceProfiler.startTimer('vehicleService.getVehicleById');
+    
+    try {
+      const cacheKey = `id:${id}`;
+      const cached = this.cache.get(cacheKey);
+      
+      if (cached && Date.now() - cached.timestamp < this.cacheTTL) {
+        VehicleService.cacheHit++;
+        return cached.data;
+      }
+      
+      VehicleService.cacheMiss++;
+      
+      const vehicle = this.vehicles.find(v => v.id === id);
+      
+      if (vehicle) {
+        this.cache.set(cacheKey, {
+          data: vehicle,
+          timestamp: Date.now()
+        });
+      }
+      
+      return vehicle;
+    } finally {
+      const duration = performanceProfiler.endTimer(timerId);
+      VehicleService.queryTimes.push(duration);
+      
+      if (duration > SLOW_QUERY_THRESHOLD_MS) {
+        VehicleService.slowQueryCount++;
+        console.warn(`[VehicleService] Slow query detected: ${duration.toFixed(2)}ms (threshold: ${SLOW_QUERY_THRESHOLD_MS}ms)`);
+      }
+      
+      if (VehicleService.queryTimes.length > 1000) {
+        VehicleService.queryTimes.shift();
+      }
+    }
+  }
+
+  invalidateCache() {
+    const timerId = performanceProfiler.startTimer('vehicleService.invalidateCache');
+    
+    try {
+      const cacheSize = this.cache.size;
+      this.cache.clear();
+      console.log(`[VehicleService] Cache invalidated, cleared ${cacheSize} entries`);
+    } finally {
+      const duration = performanceProfiler.endTimer(timerId);
+      console.log(`[VehicleService] Cache invalidation took ${duration.toFixed(2)}ms`);
+    }
+  }
+
+  static getPerformanceMetrics() {
+    const { cacheHit, cacheMiss, queryTimes, slowQueryCount } = VehicleService;
+    const totalRequests = cacheHit + cacheMiss;
+    const cacheHitRate = totalRequests > 0 ? (cacheHit / totalRequests) * 100 : 0;
+    
+    let avgQueryTime = 0;
+    let p95QueryTime = 0;
+    
+    if (queryTimes.length > 0) {
+      const sortedTimes = [...queryTimes].sort((a, b) => a - b);
+      const sum = sortedTimes.reduce((acc, time) => acc + time, 0);
+      avgQueryTime = sum / sortedTimes.length;
+      
+      const p95Index = Math.ceil(sortedTimes.length * 0.95) - 1;
+      p95QueryTime = sortedTimes[Math.max(0, p95Index)];
+    }
+    
+    return {
+      cacheHitRate: Math.round(cacheHitRate * 100) / 100,
+      avgQueryTime: Math.round(avgQueryTime * 100) / 100,
+      p95QueryTime: Math.round(p95QueryTime * 100) / 100,
+      slowQueryCount,
+      totalQueries: queryTimes.length,
+      cacheHits: cacheHit,
+      cacheMisses: cacheMiss
+    };
+  }
+
+  static resetPerformanceMetrics() {
+    VehicleService.cacheHit = 0;
+    VehicleService.cacheMiss = 0;
+    VehicleService.queryTimes = [];
+    VehicleService.slowQueryCount = 0;
+  }
+}
+
+export default VehicleService;
