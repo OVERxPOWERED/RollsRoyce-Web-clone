@@ -8,30 +8,50 @@ export default defineConfig({
   test: {
     environment: 'jsdom',
     globals: true,
-    setupFiles: ['src/test/setup.ts'],
+    globalSetup: ['./tests/setup/performanceBudgets.ts'],
+    setupFiles: ['src/test/setup.ts', './tests/setup/performanceTestUtils.ts'],
     include: ['**/__tests__/**/*.test.{ts,tsx}'],
+    testTimeout: 10000,
+    hookTimeout: 10000,
+    teardownTimeout: 5000,
+    reporters: ['verbose', 'json', 'html'],
+    outputDir: './test-results',
     coverage: {
       provider: 'v8',
       thresholds: {
-        lines: 80,
-        functions: 80,
-        branches: 70,
-        statements: 80,
+        lines: 90,
+        functions: 90,
+        branches: 85,
+        statements: 90,
       },
       reporters: ['text', 'json', 'html'],
       exclude: [
         'node_modules/',
         'src/test/',
+        'tests/',
         '**/*.d.ts',
         '**/*.config.*',
         '**/mock*',
         '**/__mocks__/**',
       ],
     },
+    environmentOptions: {
+      jsdom: {
+        resources: 'usable',
+        runScripts: 'dangerously',
+      },
+    },
+    pool: 'forks',
+    poolOptions: {
+      forks: {
+        singleFork: true,
+      },
+    },
   },
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),
+      '@tests': path.resolve(__dirname, './tests'),
     },
   },
 });
