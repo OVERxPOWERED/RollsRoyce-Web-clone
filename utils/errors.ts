@@ -1,5 +1,3 @@
-import { z } from 'zod';
-
 export enum ErrorCode {
   VALIDATION_FAILED = 'VALIDATION_FAILED',
   NOT_FOUND = 'NOT_FOUND',
@@ -109,62 +107,7 @@ export interface TelemetryEvent {
   error?: {
     name: string;
     message: string;
-    code?: string;
+    code: string;
     stack?: string;
-  };
-}
-
-export const TelemetryContextSchema = z.object({
-  service: z.string().min(1),
-  operation: z.string().min(1),
-  traceId: z.string().optional(),
-  spanId: z.string().optional(),
-  userId: z.string().optional(),
-  requestId: z.string().optional(),
-});
-
-export const TelemetryEventSchema = z.object({
-  timestamp: z.string().datetime({ offset: true }),
-  level: z.enum(['debug', 'info', 'warn', 'error', 'fatal']),
-  message: z.string().min(1),
-  context: TelemetryContextSchema,
-  metadata: z.record(z.unknown()).optional(),
-  error: z
-    .object({
-      name: z.string(),
-      message: z.string(),
-      code: z.string().optional(),
-      stack: z.string().optional(),
-    })
-    .optional(),
-});
-
-export type ValidatedTelemetryEvent = z.infer<typeof TelemetryEventSchema>;
-
-export function validateTelemetryEvent(event: unknown): ValidatedTelemetryEvent {
-  return TelemetryEventSchema.parse(event);
-}
-
-export function createTelemetryEvent(
-  level: TelemetryLevel,
-  message: string,
-  context: TelemetryContext,
-  metadata?: Record<string, unknown>,
-  error?: Error
-): TelemetryEvent {
-  return {
-    timestamp: new Date().toISOString(),
-    level,
-    message,
-    context,
-    metadata,
-    error: error
-      ? {
-          name: error.name,
-          message: error.message,
-          code: error instanceof DomainError ? error.code : undefined,
-          stack: error.stack,
-        }
-      : undefined,
   };
 }
