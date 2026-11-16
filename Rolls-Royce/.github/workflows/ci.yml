@@ -1,0 +1,340 @@
+name: CI Pipeline
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+env:
+  NODE_VERSION: '20'
+  NPM_CACHE_KEY: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
+  NPM_CACHE_KEY_FALLBACK: ${{ runner.os }}-node-
+
+jobs:
+  lint:
+    name: Lint (ESLint)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci --prefer-offline --no-audit --no-fund
+
+      - name: Run ESLint
+        run: npx eslint . --ext .ts,.tsx,.js,.jsx --max-warnings=0 --format=github
+
+  typecheck:
+    name: Type Check (TypeScript)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci --prefer-offline --no-audit --no-fund
+
+      - name: Run TypeScript type check
+        run: npx tsc --noEmit --skipLibCheck
+
+  test:
+    name: Test (Vitest + Coverage)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci --prefer-offline --no-audit --no-fund
+
+      - name: Run tests with coverage
+        run: npx vitest run --coverage --reporter=verbose --reporter=junit --outputFile=test-results.xml
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./coverage/lcov.info
+          flags: unittests
+          fail_ci_if_error: true
+          verbose: true
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-results
+          path: test-results.xml
+          retention-days: 7
+
+  build:
+    name: Build (Vite)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: [lint, typecheck, test]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci --prefer-offline --no-audit --no-fund
+
+      - name: Build production bundle
+        run: npm run build
+        env:
+          NODE_ENV: production
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          retention-days: 7
+
+  bundle-analysis:
+    name: Bundle Analysis (Size Limits)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: build
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci --prefer-offline --no-audit --no-fund
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Analyze bundle with vite-bundle-analyzer
+        run: |
+          npx vite-bundle-analyzer dist --json > bundle-analysis.json
+          cat bundle-analysis.json
+
+      - name: Enforce bundle size budgets
+        run: |
+          # Extract sizes from analysis
+          TOTAL_JS=$(jq -r '.assets[] | select(.name | endswith(".js")) | .size' bundle-analysis.json | awk '{sum+=$1} END {print sum}')
+          TOTAL_CSS=$(jq -r '.assets[] | select(.name | endswith(".css")) | .size' bundle-analysis.json | awk '{sum+=$1} END {print sum}')
+          VENDOR_JS=$(jq -r '.assets[] | select(.name | test("vendor|chunk")) | .size' bundle-analysis.json | awk '{sum+=$1} END {print sum}')
+
+          # Convert to KB
+          TOTAL_JS_KB=$((TOTAL_JS / 1024))
+          TOTAL_CSS_KB=$((TOTAL_CSS / 1024))
+          VENDOR_JS_KB=$((VENDOR_JS / 1024))
+
+          echo "Total JS: ${TOTAL_JS_KB}KB"
+          echo "Total CSS: ${TOTAL_CSS_KB}KB"
+          echo "Vendor JS: ${VENDOR_JS_KB}KB"
+
+          # Budgets (gzipped approximations - actual gzip would be ~30% of raw)
+          MAX_TOTAL_JS_KB=350
+          MAX_TOTAL_CSS_KB=50
+          MAX_VENDOR_JS_KB=150
+
+          if [ "$TOTAL_JS_KB" -gt "$MAX_TOTAL_JS_KB" ]; then
+            echo "::error::Total JS bundle size (${TOTAL_JS_KB}KB) exceeds budget (${MAX_TOTAL_JS_KB}KB)"
+            exit 1
+          fi
+
+          if [ "$TOTAL_CSS_KB" -gt "$MAX_TOTAL_CSS_KB" ]; then
+            echo "::error::Total CSS bundle size (${TOTAL_CSS_KB}KB) exceeds budget (${MAX_TOTAL_CSS_KB}KB)"
+            exit 1
+          fi
+
+          if [ "$VENDOR_JS_KB" -gt "$MAX_VENDOR_JS_KB" ]; then
+            echo "::error::Vendor JS bundle size (${VENDOR_JS_KB}KB) exceeds budget (${MAX_VENDOR_JS_KB}KB)"
+            exit 1
+          fi
+
+          echo "✅ All bundle size budgets passed"
+
+      - name: Upload bundle analysis report
+        uses: actions/upload-artifact@v4
+        with:
+          name: bundle-analysis
+          path: bundle-analysis.json
+          retention-days: 7
+
+  perf-budget:
+    name: Performance Budget (Lighthouse CI)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: build
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci --prefer-offline --no-audit --no-fund
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Install Lighthouse CI
+        run: npm install -g @lhci/cli@0.13.x
+
+      - name: Create LHCI config
+        run: |
+          cat > lighthouserc.json << 'EOF'
+          {
+            "ci": {
+              "collect": {
+                "numberOfRuns": 3,
+                "startServerCommand": "npx serve dist -p 4173",
+                "url": ["http://localhost:4173"],
+                "settings": {
+                  "headless": true,
+                  "preset": "desktop",
+                  "staticDistDir": "./dist"
+                }
+              },
+              "assert": {
+                "assertions": {
+                  "categories:performance": ["error", { "minScore": 0.9 }],
+                  "categories:accessibility": ["error", { "minScore": 0.9 }],
+                  "categories:best-practices": ["error", { "minScore": 0.9 }],
+                  "categories:seo": ["error", { "minScore": 0.8 }],
+                  "first-contentful-paint": ["error", { "maxNumericValue": 1800 }],
+                  "largest-contentful-paint": ["error", { "maxNumericValue": 2500 }],
+                  "total-blocking-time": ["error", { "maxNumericValue": 120 }],
+                  "cumulative-layout-shift": ["error", { "maxNumericValue": 0.1 }],
+                  "speed-index": ["error", { "maxNumericValue": 3000 }],
+                  "interactive": ["error", { "maxNumericValue": 3500 }],
+                  "redirects": ["off"],
+                  "viewport": ["off"],
+                  "meta-description": ["off"]
+                }
+              },
+              "upload": {
+                "target": "temporary-public-storage"
+              }
+            }
+          }
+          EOF
+
+      - name: Run Lighthouse CI
+        run: |
+          lhci autorun --fail-on-budget
+        env:
+          LHCI_GITHUB_APP_TOKEN: ${{ secrets.LHCI_GITHUB_APP_TOKEN }}
+
+      - name: Extract and verify custom budgets
+        run: |
+          # Parse Lighthouse results for custom budgets
+          LATEST_RUN=$(ls -t .lighthouseci/*.json | head -1)
+          
+          # p95 TTI < 120ms (using Total Blocking Time as proxy)
+          TBT=$(jq -r '.audits["total-blocking-time"].numericValue' "$LATEST_RUN")
+          if (( $(echo "$TBT > 120" | bc -l) )); then
+            echo "::error::Total Blocking Time (${TBT}ms) exceeds p95 budget (120ms)"
+            exit 1
+          fi
+          echo "✅ TBT: ${TBT}ms (budget: <120ms)"
+
+          # Cache hit ratio > 85% (using cache-policy audit)
+          CACHE_SCORE=$(jq -r '.audits["uses-long-cache-ttl"].score' "$LATEST_RUN")
+          if (( $(echo "$CACHE_SCORE < 0.85" | bc -l) )); then
+            echo "::error::Cache hit ratio score (${CACHE_SCORE}) below budget (0.85)"
+            exit 1
+          fi
+          echo "✅ Cache score: ${CACHE_SCORE} (budget: >0.85)"
+
+          # Vendor bundle < 150KB gz (already checked in bundle-analysis, but verify via network)
+          VENDOR_SIZE=$(jq -r '.audits["uses-rel-preload"].details.items[]? | select(.url | test("vendor|chunk")) | .transferSize' "$LATEST_RUN" | awk '{sum+=$1} END {print sum}')
+          VENDOR_SIZE_KB=$((VENDOR_SIZE / 1024))
+          if [ "$VENDOR_SIZE_KB" -gt 150 ]; then
+            echo "::error::Vendor transfer size (${VENDOR_SIZE_KB}KB) exceeds budget (150KB gz)"
+            exit 1
+          fi
+          echo "✅ Vendor size: ${VENDOR_SIZE_KB}KB (budget: <150KB)"
+
+          echo "✅ All performance budgets passed"
+
+      - name: Upload Lighthouse results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: lighthouse-results
+          path: .lighthouseci/
+          retention-days: 7
+
+  summary:
+    name: CI Summary
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: [lint, typecheck, test, build, bundle-analysis, perf-budget]
+    if: always()
+    steps:
+      - name: Check job statuses
+        run: |
+          echo "## CI Pipeline Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Job | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Lint | ${{ needs.lint.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Type Check | ${{ needs.typecheck.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Test | ${{ needs.test.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Build | ${{ needs.build.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Bundle Analysis | ${{ needs.bundle-analysis.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Performance Budget | ${{ needs.perf-budget.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Fail if any required job failed
+          if [[ "${{ needs.lint.result }}" != "success" ]] || \
+             [[ "${{ needs.typecheck.result }}" != "success" ]] || \
+             [[ "${{ needs.test.result }}" != "success" ]] || \
+             [[ "${{ needs.build.result }}" != "success" ]] || \
+             [[ "${{ needs.bundle-analysis.result }}" != "success" ]] || \
+             [[ "${{ needs.perf-budget.result }}" != "success" ]]; then
+            echo "❌ One or more jobs failed"
+            exit 1
+          fi
+
+          echo "✅ All jobs passed successfully"
