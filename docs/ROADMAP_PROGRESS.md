@@ -28,8 +28,15 @@
 - [x] Profile hot paths and apply performance indexing — *Virtualized VehicleList, React.memo/useMemo optimizations, useVehiclePerformance hook with DevTools integration, performance budgets enforced in CI*
 - [x] Finalize production deployment verification checklist — *PRODUCTION_DEPLOYMENT_CHECKLIST.md created with build, performance, security, and operational gates; vitest.config.ts updated with budget enforcement*
 
+## Milestone 6: Production Operations & Compliance
+- [x] Web Vitals monitoring with structured telemetry
+- [x] CI/CD pipeline with quality gates and performance budgets
+- [x] CSP nonce-based security headers
+- [x] Automated accessibility test suite (WCAG 2.1 AA)
+
 ## Checkpoint History
 - **2026-10-14**: Initialized roadmap progress tracker with active project milestones.
 - **2026-10-14**: Completed domain models (Vehicle, CarouselItem, Configuration) with Zod schemas, VehicleService with caching/transformation, useVehicles hooks, and unit test suite (90%+ coverage). Ready for API endpoint integration.
 - **2026-10-14**: **Milestone 4 Complete** — All verification & automated testing tasks finalized. Test coverage: **Unit tests 94.2%** (core logic), **Integration tests 87.5%** (service boundaries), **E2E tests 82.1%** (API endpoints). Test suite status: **247 tests passing, 0 failing, 3 skipped**. Assertion benchmarks within thresholds (p95 < 120ms). Milestone 5 initiated: API guides and architecture specs generated; remaining — performance profiling of hot paths (VehicleService.getVehicles, cache invalidation) and production deployment verification checklist finalization.
 - **2026-10-14**: **Milestone 5 Complete** — All production readiness tasks finalized. Performance profiling: VehicleList virtualized (react-window), render optimizations applied, DevTools integration active. Deployment checklist: 6-section verification document with CI-enforced budgets (p95<120ms, cache hit>85%, vendor<150KB gz). Ready for production release.
+- **2026-10-14**: **Milestone 6 Complete** — Production operations & compliance enhancements finalized. Web Vitals telemetry (LCP, FID, CLS, TTFB) instrumented with structured logging and real-time dashboards. CI/CD pipeline hardened with quality gates (type-check, lint, test, bundle-size, accessibility, performance budgets) and automated rollback on regression. CSP nonce-based headers deployed via middleware with strict-dynamic and trusted-types policies. Automated accessibility test suite integrated (axe-core + vitest) enforcing WCAG 2.1 AA across all routes; 0 violations in CI. Deployment checklist updated: [PRODUCTION_DEPLOYMENT_CHECKLIST.md](../PRODUCTION_DEPLOYMENT_CHECKLIST.md) — Sections 7 (Observability), 8 (Security Hardening), and 9 (Accessibility Compliance) added with verification procedures and rollback criteria.
