@@ -1,6 +1,9 @@
-import React, { useMemo, useCallback, useState } from 'react';
+import React, { useMemo, useCallback, useState, useEffect } from 'react';
 import { FixedSizeList as List, AutoSizer } from 'react-window';
 import { performanceProfiler } from '@/utils/performanceProfiler';
+import { useTelemetry } from '@/hooks/useTelemetry';
+import { useVehicles } from '@/hooks/useVehicles';
+import { withErrorBoundary } from '@/components/ErrorBoundary/ErrorBoundary';
 import './VehicleList.css';
 
 const VehicleListItem = React.memo(({ 
@@ -101,7 +104,6 @@ const VehicleListItem = React.memo(({
           </svg>
           <span>{isCompared ? 'Compared' : 'Compare'}</span>
         </button>
-        
         <button
           className="action-btn details-btn"
           onClick={(e) => {
@@ -124,176 +126,277 @@ const VehicleListItem = React.memo(({
 VehicleListItem.displayName = 'VehicleListItem';
 
 const VehicleList = ({ 
-  vehicles = [], 
-  onVehicleSelect, 
+  filters = {}, 
+  sortConfig = { field: 'price', direction: 'asc' },
+  pagination = { page: 1, pageSize: 20 },
+  onVehicleSelect,
   onVehicleCompare,
-  selectedVehicleId,
+  selectedVehicleIds = [],
   comparedVehicleIds = [],
-  filters = {},
-  sortConfig = { key: 'price', direction: 'asc' },
-  itemHeight = 280,
-  windowHeight = 600,
-  overscanCount = 5,
-  className = '',
-  'data-testid': testId
+  className = ''
 }) => {
-  const [scrollTop, setScrollTop] = useState(0);
-  
-  const processedVehicles = useMemo(() => {
-    return performanceProfiler.measure('vehicle-list-processing', () => {
-      let result = [...vehicles];
-      
-      if (filters.make && filters.make.length > 0) {
-        result = result.filter(v => filters.make.includes(v.make));
-      }
-      if (filters.priceRange) {
-        result = result.filter(v => 
-          v.price >= filters.priceRange.min && v.price <= filters.priceRange.max
-        );
-      }
-      if (filters.yearRange) {
-        result = result.filter(v => 
-          v.year >= filters.yearRange.min && v.year <= filters.yearRange.max
-        );
-      }
-      if (filters.drivetrain && filters.drivetrain.length > 0) {
-        result = result.filter(v => filters.drivetrain.includes(v.drivetrain));
-      }
-      if (filters.bodyStyle && filters.bodyStyle.length > 0) {
-        result = result.filter(v => filters.bodyStyle.includes(v.bodyStyle));
-      }
-      if (filters.searchQuery) {
-        const query = filters.searchQuery.toLowerCase();
-        result = result.filter(v => 
-          `${v.make} ${v.model} ${v.year} ${v.trim || ''}`.toLowerCase().includes(query)
-        );
-      }
-      
-      result.sort((a, b) => {
-        const aVal = a[sortConfig.key];
-        const bVal = b[sortConfig.key];
-        if (aVal === undefined || bVal === undefined) return 0;
-        const comparison = aVal > bVal ? 1 : aVal < bVal ? -1 : 0;
-        return sortConfig.direction === 'asc' ? comparison : -comparison;
+  const telemetry = useTelemetry();
+  const { 
+    vehicles, 
+    loading, 
+    error, 
+    totalCount,
+    refetch,
+    fetchTiming 
+  } = useVehicles({ filters, sortConfig, pagination });
+
+  const [retryCount, setRetryCount] = useState(0);
+
+  useEffect(() => {
+    if (fetchTiming) {
+      telemetry.trackPerformance('vehicle_fetch', fetchTiming.duration, {
+        vehicleCount: vehicles.length,
+        totalCount,
+        page: pagination.page,
+        pageSize: pagination.pageSize,
+        filters: Object.keys(filters).length,
+        sortField: sortConfig.field,
+        sortDirection: sortConfig.direction,
+        retryAttempt: retryCount
       });
-      
-      return result;
-    });
-  }, [vehicles, filters, sortConfig]);
-  
-  const handleSelect = useCallback((vehicle) => {
-    performanceProfiler.mark('vehicle-select', { vehicleId: vehicle.id });
-    onVehicleSelect?.(vehicle);
-  }, [onVehicleSelect]);
-  
-  const handleCompare = useCallback((vehicle) => {
-    performanceProfiler.mark('vehicle-compare', { vehicleId: vehicle.id });
-    onVehicleCompare?.(vehicle);
-  }, [onVehicleCompare]);
-  
-  const handleScroll = useCallback(({ scrollTop: newScrollTop }) => {
-    setScrollTop(newScrollTop);
-  }, []);
-  
-  const ItemRenderer = useCallback(({ index, style }) => {
-    const vehicle = processedVehicles[index];
-    if (!vehicle) return null;
+    }
+  }, [fetchTiming, vehicles.length, totalCount, pagination, filters, sortConfig, retryCount, telemetry]);
+
+  useEffect(() => {
+    const renderProfilerId = 'VehicleList_render';
+    performanceProfiler.start(renderProfilerId);
     
+    return () => {
+      const duration = performanceProfiler.end(renderProfilerId);
+      telemetry.trackPerformance('vehicle_list_render', duration, {
+        itemCount: vehicles.length,
+        page: pagination.page
+      });
+    };
+  }, [vehicles, pagination.page, telemetry]);
+
+  const handleFilterChange = useCallback((newFilters) => {
+    telemetry.trackInteraction('filter_change', {
+      previousFilters: filters,
+      newFilters,
+      resultCount: totalCount
+    });
+  }, [filters, totalCount, telemetry]);
+
+  const handleSortChange = useCallback((newSortConfig) => {
+    telemetry.trackInteraction('sort_change', {
+      previousSort: sortConfig,
+      newSort: newSortConfig
+    });
+  }, [sortConfig, telemetry]);
+
+  const handlePageChange = useCallback((newPage) => {
+    telemetry.trackInteraction('pagination_change', {
+      previousPage: pagination.page,
+      newPage,
+      pageSize: pagination.pageSize
+    });
+  }, [pagination, telemetry]);
+
+  const handleVehicleSelect = useCallback((vehicle) => {
+    telemetry.trackInteraction('vehicle_select', {
+      vehicleId: vehicle.id,
+      vehicleMake: vehicle.make,
+      vehicleModel: vehicle.model,
+      vehiclePrice: vehicle.price
+    });
+    onVehicleSelect?.(vehicle);
+  }, [onVehicleSelect, telemetry]);
+
+  const handleVehicleCompare = useCallback((vehicle) => {
+    const isCurrentlyCompared = comparedVehicleIds.includes(vehicle.id);
+    telemetry.trackInteraction('vehicle_compare_toggle', {
+      vehicleId: vehicle.id,
+      vehicleMake: vehicle.make,
+      vehicleModel: vehicle.model,
+      action: isCurrentlyCompared ? 'remove' : 'add',
+      totalCompared: isCurrentlyCompared ? comparedVehicleIds.length - 1 : comparedVehicleIds.length + 1
+    });
+    onVehicleCompare?.(vehicle);
+  }, [comparedVehicleIds, onVehicleCompare, telemetry]);
+
+  const handleRetry = useCallback(() => {
+    telemetry.trackInteraction('error_retry', {
+      errorMessage: error?.message,
+      retryCount: retryCount + 1
+    });
+    setRetryCount(prev => prev + 1);
+    refetch();
+  }, [error, retryCount, refetch, telemetry]);
+
+  const itemData = useMemo(() => ({
+    vehicles,
+    onSelect: handleVehicleSelect,
+    onCompare: handleVehicleCompare,
+    selectedVehicleIds,
+    comparedVehicleIds
+  }), [vehicles, handleVehicleSelect, handleVehicleCompare, selectedVehicleIds, comparedVehicleIds]);
+
+  const ItemRenderer = useCallback(({ index, style }) => {
+    const vehicle = vehicles[index];
+    if (!vehicle) return null;
+
     return (
       <VehicleListItem
-        key={vehicle.id || index}
-        index={index}
         vehicle={vehicle}
-        style={style}
-        onSelect={handleSelect}
-        onCompare={handleCompare}
-        isSelected={vehicle.id === selectedVehicleId}
+        onSelect={handleVehicleSelect}
+        onCompare={handleVehicleCompare}
+        isSelected={selectedVehicleIds.includes(vehicle.id)}
         isCompared={comparedVehicleIds.includes(vehicle.id)}
+        index={index}
+        style={style}
       />
     );
-  }, [processedVehicles, handleSelect, handleCompare, selectedVehicleId, comparedVehicleIds]);
-  
-  const totalHeight = processedVehicles.length * itemHeight;
-  
-  return performanceProfiler.measureRender('VehicleList', () => (
+  }, [vehicles, handleVehicleSelect, handleVehicleCompare, selectedVehicleIds, comparedVehicleIds]);
+
+  const EmptyState = useMemo(() => (
+    <div className="vehicle-list-empty" role="status" aria-live="polite">
+      <svg className="empty-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+        <path d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+      </svg>
+      <h3>No vehicles found</h3>
+      <p>Try adjusting your filters or search criteria</p>
+      <button 
+        className="btn btn-primary"
+        onClick={() => handleFilterChange({})}
+        aria-label="Clear all filters"
+      >
+        Clear Filters
+      </button>
+    </div>
+  ), [handleFilterChange]);
+
+  const ErrorFallback = useMemo(() => (
+    <div className="vehicle-list-error" role="alert">
+      <svg className="error-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+        <circle cx="12" cy="12" r="10" />
+        <line x1="12" y1="8" x2="12" y2="12" />
+        <line x1="12" y1="16" x2="12.01" y2="16" />
+      </svg>
+      <h3>Unable to load vehicles</h3>
+      <p>{error?.message || 'An unexpected error occurred'}</p>
+      <div className="error-actions">
+        <button 
+          className="btn btn-primary"
+          onClick={handleRetry}
+          disabled={loading}
+          aria-label={`Retry loading vehicles (attempt ${retryCount + 1})`}
+        >
+          {loading ? 'Retrying...' : `Retry (${retryCount + 1})`}
+        </button>
+        <button 
+          className="btn btn-secondary"
+          onClick={() => handleFilterChange({})}
+          aria-label="Clear filters and retry"
+        >
+          Clear Filters & Retry
+        </button>
+      </div>
+    </div>
+  ), [error, loading, retryCount, handleRetry, handleFilterChange]);
+
+  if (error && vehicles.length === 0) {
+    return <ErrorFallback />;
+  }
+
+  return (
     <div 
       className={`vehicle-list-container ${className}`}
-      data-testid={testId}
       role="list"
       aria-label="Vehicle listings"
+      aria-busy={loading && vehicles.length === 0}
     >
       <div className="vehicle-list-header">
-        <div className="results-count">
-          {processedVehicles.length} {processedVehicles.length === 1 ? 'vehicle' : 'vehicles'} found
-        </div>
-        <div className="sort-controls" role="group" aria-label="Sort vehicles">
-          <label htmlFor="sort-select" className="visually-hidden">Sort by</label>
-          <select
-            id="sort-select"
-            value={`${sortConfig.key}-${sortConfig.direction}`}
-            onChange={(e) => {
-              const [key, direction] = e.target.value.split('-');
-              // Sort change would be handled by parent via callback
-            }}
-            className="sort-select"
-          >
-            <option value="price-asc">Price: Low to High</option>
-            <option value="price-desc">Price: High to Low</option>
-            <option value="year-desc">Year: Newest First</option>
-            <option value="year-asc">Year: Oldest First</option>
-            <option value="mileage-asc">Mileage: Low to High</option>
-            <option value="mileage-desc">Mileage: High to Low</option>
-          </select>
+        <div className="vehicle-list-summary">
+          <span className="result-count">
+            {totalCount.toLocaleString()} vehicle{totalCount !== 1 ? 's' : ''} found
+          </span>
+          {filters && Object.keys(filters).length > 0 && (
+            <button 
+              className="clear-filters-btn"
+              onClick={() => handleFilterChange({})}
+              aria-label="Clear all filters"
+            >
+              Clear filters
+            </button>
+          )}
         </div>
       </div>
-      
-      {processedVehicles.length === 0 ? (
-        <div className="vehicle-list-empty" role="status">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="empty-icon">
-            <circle cx="11" cy="11" r="8" />
-            <line x1="21" y1="21" x2="16.65" y2="16.65" />
-            <line x1="8" y1="8" x2="14" y2="14" />
-            <line x1="14" y1="8" x2="8" y2="14" />
-          </svg>
-          <h3>No vehicles found</h3>
-          <p>Try adjusting your filters or search criteria</p>
+
+      {loading && vehicles.length === 0 && (
+        <div className="vehicle-list-loading" role="status" aria-live="polite">
+          <div className="loading-spinner" aria-hidden="true" />
+          <span>Loading vehicles...</span>
         </div>
-      ) : (
+      )}
+
+      {vehicles.length === 0 && !loading && !error && <EmptyState />}
+
+      {vehicles.length > 0 && (
         <AutoSizer disableHeight>
           {({ width }) => (
             <List
               className="vehicle-list"
-              height={windowHeight}
               width={width}
-              itemCount={processedVehicles.length}
-              itemSize={itemHeight}
-              itemData={processedVehicles}
-              overscanCount={overscanCount}
-              onScroll={handleScroll}
-              itemKey={(index) => processedVehicles[index]?.id || index}
+              height={600}
+              itemCount={vehicles.length}
+              itemSize={280}
+              itemData={itemData}
+              overscanCount={5}
+              role="list"
+              aria-label="Vehicle list"
             >
               {ItemRenderer}
             </List>
           )}
         </AutoSizer>
       )}
-      
-      {scrollTop > 100 && (
-        <button
-          className="scroll-to-top"
-          onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
-          aria-label="Scroll to top"
-        >
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <path d="M18 15l-6-6-6 6" />
-          </svg>
-        </button>
+
+      {vehicles.length > 0 && totalCount > pagination.pageSize && (
+        <div className="vehicle-list-pagination" role="navigation" aria-label="Pagination">
+          <span className="pagination-info">
+            Showing {((pagination.page - 1) * pagination.pageSize) + 1}–{Math.min(pagination.page * pagination.pageSize, totalCount)} of {totalCount.toLocaleString()}
+          </span>
+          <div className="pagination-controls">
+            <button
+              className="pagination-btn"
+              onClick={() => handlePageChange(pagination.page - 1)}
+              disabled={pagination.page <= 1}
+              aria-label="Previous page"
+              aria-disabled={pagination.page <= 1}
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <polyline points="15 18 9 12 15 6" />
+              </svg>
+            </button>
+            <button
+              className="pagination-btn"
+              onClick={() => handlePageChange(pagination.page + 1)}
+              disabled={pagination.page * pagination.pageSize >= totalCount}
+              aria-label="Next page"
+              aria-disabled={pagination.page * pagination.pageSize >= totalCount}
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <polyline points="9 18 15 12 9 6" />
+              </svg>
+            </button>
+          </div>
+        </div>
       )}
     </div>
-  ));
+  );
 };
 
 VehicleList.displayName = 'VehicleList';
 
-export { VehicleList, VehicleListItem };
-export default VehicleList;
+const VehicleListWithErrorBoundary = withErrorBoundary(VehicleList, {
+  fallback: ({ error, resetErrorBoundary }) => (
+    <div className="vehicle-list-error-boundary" role="alert">
+      <svg className="error-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+        <circle cx="12" cy="12" r="10" />
+        <line x1="12" y1="8" x2
